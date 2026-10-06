@@ -1,68 +1,64 @@
 ![Talus](images/banner.png)
 
-# Talus: bouldering log
+# Talus
 
-> An offline-first bouldering tracker for climbers who log at the crag with cold hands and no signal, with a coach that tells you what to work on next.
+A bouldering log app for climbing outdoors and in the gym. It's live on the [App Store](https://apps.apple.com/app/id6779186802), and there's a site at [taluslog.com](https://taluslog.com).
 
-[![App Store](https://img.shields.io/badge/App_Store-live-0D96F6?style=flat-square&logo=appstore&logoColor=white)](https://apps.apple.com/app/id6779186802)
-[![Website](https://img.shields.io/badge/taluslog.com-1A9E6E?style=flat-square)](https://taluslog.com)
-![React Native](https://img.shields.io/badge/React_Native-20232A?style=flat-square&logo=react&logoColor=61DAFB)
-![Expo](https://img.shields.io/badge/Expo_54-000020?style=flat-square&logo=expo&logoColor=white)
-![Supabase](https://img.shields.io/badge/Supabase-3FCF8E?style=flat-square&logo=supabase&logoColor=white)
-![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)
-
-> [!NOTE]
-> Talus is a live product, so the source is private. This repo explains what it does and how it's built.
+It's a live app, so the code is private. This repo is a write-up of what it does and how I built it.
 
 <p>
   <img src="images/log.jpg" width="260" alt="Logging a session">
   <img src="images/projects.png" width="260" alt="Projects and recent sessions">
-  <img src="images/map.png" width="260" alt="Community map of crags and boulders">
+  <img src="images/map.png" width="260" alt="Map of crags and boulders">
 </p>
+
+## Why
+
+At the crag you've usually got cold hands and no signal, so Talus is built to let you log a session in a few taps with no connection. It syncs when you're back online.
 
 ## What it does
 
-- **Log a session in seconds.** Tap sends and attempts per grade, grouped by wall angle, with an optional per-climb detail view. Logging makes no network calls, so it works at the crag and syncs later.
-- **Stats that mean something.** Grade pyramid, send rate, volume, top grade, training load and a grade forecast, over 7 days up to all time.
-- **A coach.** It gives a weekly focus, a briefing and a session plan that names real grades and problem counts, scaled to how you actually climb.
-- **Community map.** Over 10,000 crags, boulders and gyms (OpenStreetMap plus climber-added spots), with photos, ratings, beta videos, wishlists, moderation and offline map packs.
-- **Climb together.** Share a session through an expiring link, and your partner claims it into their own log.
-- **Your data stays yours.** Import from theCrag or Mountain Project, export to CSV or JSON, and delete your account in-app.
+- Log sends and attempts per grade, split by wall angle, with more detail per climb if you want it.
+- Stats: grade pyramid, send rate, volume, top grade, training load and a grade forecast.
+- A coach that gives you something to focus on each week and a session plan with actual grades and numbers.
+- A map of 10,000+ crags, boulders and gyms, from OpenStreetMap plus spots people have added, with photos, ratings, beta videos and offline maps.
+- Share a session with whoever you climbed with, and it goes into their log too.
+- Import from theCrag or Mountain Project, and export to CSV or JSON.
 
-## The coach: statistics, not an LLM
+## The coach
 
-The coach is entirely rule-based TypeScript, and that's deliberate. Climbers trust advice they can check, so every claim has to survive its own sample size.
+There's no AI in it. It's all rules and stats in TypeScript, because if it tells you overhangs are your weakness, you should be able to trust that.
 
-- **Send rate is an interval, not a number.** The log stores failed tries in buckets, so the true rate sits within a range. Comparisons widen that with Wilson intervals.
-- **Claims gate themselves.** "Overhang is your weakness" only appears if the two intervals don't overlap, so small samples quietly suppress themselves. Each kind of claim has its own evidence floor.
-- **One rule wins per week.** A fixed priority order (rest, ease back in, weak angle, weak hold type, consolidate, push a grade, consistency, maintain) means the advice never contradicts itself.
-- **Benchmarked against real climbers.** The main diagnostic, the gap between your max and flash grade, is compared with published norms from about 88,000 climbers.
-- **Rebuilt when it was wrong.** The first training-load model told occasional climbers to rest forever (an acute:chronic ratio stuck at 4.0), and the forecast was skewed by how much people logged rather than how well they climbed. Both were replaced. There are about 225 unit tests on the coaching logic.
+Some of how it works:
 
-## Architecture
+- Send rate is worked out as a range rather than a single number, because of how failed attempts get logged. When it compares two things, say slab and overhang, it only says there's a difference if the ranges don't overlap. If there isn't much data yet, it doesn't say anything.
+- Each week it picks one thing to focus on, in a fixed order: rest, ease back in, weak angle, weak hold type, consolidate, push a grade, consistency, maintain. That way you don't get mixed messages.
+- The gap between your max grade and your flash grade is compared with published norms from around 88,000 climbers.
+
+I got some of this wrong the first time. The training load maths told anyone who climbs occasionally to rest forever, and the grade forecast was really measuring how much people logged rather than how hard they climbed. I rewrote both, and the coaching logic now has about 225 tests.
+
+## How it's built
 
 ```mermaid
 flowchart LR
-    UI[App UI] -->|write, synced=0| DB[(SQLite<br/>on device)]
-    DB -->|push on foreground| SB[(Supabase<br/>Postgres + RLS)]
-    SB -->|incremental pull<br/>updated_at cursor| DB
-    UI --> MAP[Mapbox<br/>community + OSM spots]
+    UI[App] -->|saves first| DB[(SQLite on the phone)]
+    DB -->|push unsynced| SB[(Supabase)]
+    SB -->|pull changes| DB
+    UI --> MAP[Mapbox map]
     MAP --> SB
-    SB -->|DB webhooks| EF[Edge functions]
-    EF --> PUSH[Expo push]
-    EF --> MAIL[Resend email]
+    SB -->|webhooks| EF[Edge functions]
+    EF --> PUSH[Push notifications]
+    EF --> MAIL[Email]
     EF --> RC[RevenueCat]
 ```
 
-- **Offline-first sync.** Every write lands in SQLite first, scoped to the signed-in account. Sync pushes unsynced rows and pulls changes through a per-user cursor. Cloud rows never overwrite local unsynced edits, and a bad row is skipped instead of jamming the queue. Photos have EXIF stripped, and a climb only counts as synced once its photo is uploaded.
-- **Schema-drift guard.** One unknown column in production would block all sync, so a pre-ship check compares schemas, and sync failures are reported with a schema-error flag.
-- **OSM import with an evidence gate.** A spot is only imported if OpenStreetMap documents real climbing data (a grade, discipline or route count). The import is idempotent.
-- **Map performance.** Mapbox gets the full pin set with native clustering, so panning never waits on JavaScript.
+- Everything saves to SQLite on the phone first. When the app opens with a connection, it pushes anything unsynced to Supabase and pulls whatever's changed since the last sync. Cloud data never overwrites something you've changed locally that hasn't synced yet.
+- Photos have their location data stripped before they upload.
+- Before each release there's a check that the production database matches what the app expects, because one unexpected column would stop sync for everyone.
+- Spots from OpenStreetMap only get imported if they have real climbing info on them, like a grade or a route count. Otherwise the map fills up with junk.
 
-## By the numbers
-
-233 commits · 38 screens · 46 database migrations · 5 edge functions · about 225 tests · live on iOS, Android in progress
+233 commits, 38 screens, 46 migrations and 5 edge functions. iOS is live and Android is in progress.
 
 ## Stack
 
-React Native 0.81 · Expo SDK 54 · Expo Router · TypeScript (strict) · expo-sqlite · Supabase (Postgres, Auth, Storage, Edge Functions) · Mapbox · RevenueCat · PostHog · Resend · EAS Build + Update · Vitest
+React Native, Expo, Expo Router, TypeScript, SQLite, Supabase (Postgres, Auth, Storage, Edge Functions), Mapbox, RevenueCat, PostHog, Resend, EAS, Vitest
